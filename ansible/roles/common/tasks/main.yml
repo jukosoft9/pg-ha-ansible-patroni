@@ -1,0 +1,42 @@
+---
+- name: Install base packages
+  ansible.builtin.apt:
+    name: "{{ common_packages }}"
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+    lock_timeout: 300   # fresh VMs: unattended-upgrades may hold the dpkg lock at first boot
+
+- name: Set timezone
+  community.general.timezone:
+    name: "{{ common_timezone }}"
+
+- name: Ensure chrony is enabled and running
+  ansible.builtin.service:
+    name: chrony
+    state: started
+    enabled: true
+
+- name: Populate /etc/hosts with cluster nodes (private network IPs)
+  ansible.builtin.blockinfile:
+    path: /etc/hosts
+    marker: "# {mark} ANSIBLE MANAGED - pg-ha cluster nodes"
+    block: |
+      {% for h in groups['all'] %}
+      {{ hostvars[h].ansible_host }} {{ h }}
+      {% endfor %}
+
+- name: Lower swappiness for database hosts
+  ansible.posix.sysctl:
+    name: vm.swappiness
+    value: "10"
+    sysctl_file: /etc/sysctl.d/60-pg-ha.conf
+    reload: true
+
+# Vagrant maps the hostname to 127.0.2.1; cluster nodes must resolve their own name
+# to the private IP, never to loopback.
+- name: Remove loopback mapping of the node's hostname
+  ansible.builtin.lineinfile:
+    path: /etc/hosts
+    regexp: '^127\.0\.[12]\.1\s'
+    state: absent

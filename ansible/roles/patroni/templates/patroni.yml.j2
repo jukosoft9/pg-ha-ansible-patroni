@@ -1,0 +1,121 @@
+# {{ ansible_managed }}
+scope: {{ patroni_scope }}
+namespace: /service/
+name: {{ inventory_hostname }}
+
+log:
+  level: INFO
+
+# REST API over HTTPS. Read-only health endpoints are open (for load balancers);
+# state-changing endpoints (switchover, restart, reload) require basic auth.
+restapi:
+  listen: {{ ansible_host }}:{{ patroni_restapi_port }}
+  connect_address: {{ ansible_host }}:{{ patroni_restapi_port }}
+  certfile: {{ tls_node_cert }}
+  keyfile: {{ tls_node_key }}
+  cafile: {{ tls_ca_cert }}
+  verify_client: optional
+  authentication:
+    username: {{ patroni_restapi_username }}
+    password: "{{ patroni_restapi_password }}"
+
+# Used by patronictl when talking to the REST API
+ctl:
+  cacert: {{ tls_ca_cert }}
+  certfile: {{ tls_node_cert }}
+  keyfile: {{ tls_node_key }}
+
+# DCS: etcd v3 API over mTLS
+etcd3:
+  protocol: https
+  hosts:
+{% for h in groups['etcd_cluster'] %}
+    - {{ hostvars[h].ansible_host }}:{{ etcd_client_port }}
+{% endfor %}
+  cacert: {{ tls_ca_cert }}
+  cert: {{ tls_node_cert }}
+  key: {{ tls_node_key }}
+
+bootstrap:
+  # Written to etcd once at cluster creation; afterwards change with 'patronictl edit-config'.
+  dcs:
+    ttl: {{ patroni_ttl }}
+    loop_wait: {{ patroni_loop_wait }}
+    retry_timeout: {{ patroni_retry_timeout }}
+    maximum_lag_on_failover: {{ patroni_maximum_lag_on_failover }}
+    postgresql:
+      use_pg_rewind: true
+      use_slots: true
+      parameters:
+        max_connections: 200
+        shared_buffers: {{ patroni_shared_buffers }}
+        effective_cache_size: {{ patroni_effective_cache_size }}
+        work_mem: {{ patroni_work_mem }}
+        maintenance_work_mem: {{ patroni_maintenance_work_mem }}
+        wal_level: replica
+        hot_standby: "on"
+        max_wal_senders: 10
+        max_replication_slots: 10
+        wal_keep_size: 256MB
+        max_wal_size: 2GB
+        min_wal_size: 256MB
+        checkpoint_completion_target: 0.9
+        password_encryption: scram-sha-256
+        log_line_prefix: "%m [%p] %q%u@%d "
+        log_lock_waits: "on"
+        log_min_duration_statement: 1000
+        log_temp_files: 0
+  initdb:
+    - encoding: UTF8
+    - locale: C.UTF-8
+    - data-checksums
+
+postgresql:
+  listen: "{{ ansible_host }},127.0.0.1:{{ postgresql_port }}"
+  connect_address: "{{ ansible_host }}:{{ postgresql_port }}"
+  data_dir: {{ postgresql_data_dir }}
+  bin_dir: {{ postgresql_bin_dir }}
+  pgpass: /var/lib/postgresql/.pgpass_patroni
+  callbacks:
+    on_start: {{ patroni_config_dir }}/callbacks/pgbouncer_callback.sh
+    on_role_change: {{ patroni_config_dir }}/callbacks/pgbouncer_callback.sh
+  authentication:
+    superuser:
+      username: postgres
+      password: "{{ postgres_superuser_password }}"
+    replication:
+      username: {{ patroni_replication_username }}
+      password: "{{ replication_password }}"
+      sslmode: verify-full
+      sslrootcert: {{ tls_ca_cert }}
+    rewind:
+      username: {{ patroni_rewind_username }}
+      password: "{{ rewind_password }}"
+      sslmode: verify-full
+      sslrootcert: {{ tls_ca_cert }}
+  parameters:
+    unix_socket_directories: /var/run/postgresql
+    ssl: "on"
+    ssl_cert_file: {{ tls_node_cert }}
+    ssl_key_file: {{ tls_node_key }}
+    ssl_ca_file: {{ tls_ca_cert }}
+    ssl_min_protocol_version: TLSv1.2
+  # TCP connections must use TLS + SCRAM; any non-SSL TCP attempt is rejected outright.
+  pg_hba:
+    - local     all          postgres                                         peer
+    - local     all          all                                              scram-sha-256
+    - hostssl   replication  {{ patroni_replication_username }}  {{ private_network_cidr }}  scram-sha-256
+    - hostssl   all          all            127.0.0.1/32                      scram-sha-256
+    - hostssl   all          all            {{ private_network_cidr }}        scram-sha-256
+    - hostnossl all          all            0.0.0.0/0                         reject
+    - hostnossl replication  all            0.0.0.0/0                         reject
+
+# Production: enable softdog with mode 'required' to fence a hung primary.
+watchdog:
+  mode: "off"
+
+tags:
+  nofailover: false
+  noloadbalance: false
+  clonefrom: false
+  nosync: false

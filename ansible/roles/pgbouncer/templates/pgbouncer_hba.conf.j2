@@ -1,0 +1,12 @@
+# {{ ansible_managed }}
+# TYPE    DATABASE   USER      ADDRESS              METHOD
+# Admin console: only the postgres OS user, via the local socket
+local     pgbouncer  postgres                       peer
+# Superuser and admin console are never reachable over the network
+hostssl   all        postgres  0.0.0.0/0            reject
+hostssl   pgbouncer  all       0.0.0.0/0            reject
+# Everything else: TLS + SCRAM only (no 'host'/'hostnossl' lines => plain TCP is rejected)
+hostssl   all        all       127.0.0.1/32         scram-sha-256
+{% for cidr in pgbouncer_client_cidrs %}
+hostssl   all        all       {{ cidr }}{{ ' ' * (20 - cidr | length) }} scram-sha-256
+{% endfor %}

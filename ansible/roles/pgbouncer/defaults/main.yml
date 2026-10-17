@@ -1,0 +1,6 @@
+pgbouncer_config_dir: /etc/pgbouncer
+pgbouncer_pool_mode: transaction
+pgbouncer_max_client_conn: 500
+pgbouncer_default_pool_size: 20
+pgbouncer_reserve_pool_size: 5
+pgbouncer_max_prepared_statements: 200

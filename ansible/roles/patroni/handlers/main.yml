@@ -1,0 +1,7 @@
+---
+# Reload only: restarting Patroni on the leader would trigger a failover.
+# PostgreSQL restarts (pending_restart) are done deliberately with 'patronictl restart'.
+- name: Reload patroni
+  ansible.builtin.systemd_service:
+    name: patroni
+    state: reloaded

@@ -1,0 +1,13 @@
+common_timezone: Etc/UTC
+common_packages:
+  - acl               # required for Ansible 'become_user: postgres'
+  - ca-certificates
+  - curl
+  - gnupg
+  - chrony            # etcd/Patroni use leases & TTLs - clocks must be in sync
+  - python3-psycopg2  # used by community.postgresql modules
+  - jq
+  - sysstat           # iostat - used to show I/O impact
+  - iotop
+  - htop
+  - vim

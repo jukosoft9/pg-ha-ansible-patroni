@@ -1,0 +1,15 @@
+patroni_scope: "{{ cluster_name }}"
+patroni_config_dir: /etc/patroni
+patroni_config_file: "{{ patroni_config_dir }}/patroni.yml"
+
+# DCS timings (seconds): leader lock TTL, HA loop interval, DCS/PG retry window
+patroni_ttl: 30
+patroni_loop_wait: 10
+patroni_retry_timeout: 10
+patroni_maximum_lag_on_failover: 1048576   # 1 MB of WAL
+
+# Sized for 2.5 GB VMs
+patroni_shared_buffers: 512MB
+patroni_effective_cache_size: 1536MB
+patroni_work_mem: 8MB
+patroni_maintenance_work_mem: 128MB

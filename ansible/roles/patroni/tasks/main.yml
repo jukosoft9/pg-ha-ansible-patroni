@@ -1,0 +1,86 @@
+---
+# install_recommends=false: the Debian package recommends the 'postgresql' metapackage,
+# which would pull in a newer major version alongside 17.
+- name: Install Patroni (PGDG package)
+  ansible.builtin.apt:
+    name: patroni
+    state: present
+    install_recommends: false
+    lock_timeout: 300
+
+- name: Create Patroni config directory
+  ansible.builtin.file:
+    path: "{{ patroni_config_dir }}"
+    state: directory
+    owner: root
+    group: postgres
+    mode: "0750"
+
+- name: Deploy Patroni configuration (contains secrets)
+  ansible.builtin.template:
+    src: patroni.yml.j2
+    dest: "{{ patroni_config_file }}"
+    owner: root
+    group: postgres
+    mode: "0640"
+  notify: Reload patroni
+
+- name: Deploy Patroni systemd unit
+  ansible.builtin.template:
+    src: patroni.service.j2
+    dest: /etc/systemd/system/patroni.service
+    mode: "0644"
+
+- name: patronictl defaults for root login shells
+  ansible.builtin.copy:
+    dest: /etc/profile.d/patroni.sh
+    mode: "0644"
+    content: |
+      export PATRONICTL_CONFIG_FILE={{ patroni_config_file }}
+
+# Callback: restart the local PgBouncer on start/role change so it never serves a stale
+# in_hot_standby value (which breaks libpq target_session_attrs leader discovery).
+- name: Create Patroni callbacks directory
+  ansible.builtin.file:
+    path: "{{ patroni_config_dir }}/callbacks"
+    state: directory
+    owner: root
+    group: postgres
+    mode: "0750"
+
+- name: Deploy PgBouncer role-change callback
+  ansible.builtin.copy:
+    src: pgbouncer_callback.sh
+    dest: "{{ patroni_config_dir }}/callbacks/pgbouncer_callback.sh"
+    owner: root
+    group: postgres
+    mode: "0750"
+
+- name: Allow Patroni (postgres) to restart PgBouncer - this one command only
+  ansible.builtin.copy:
+    dest: /etc/sudoers.d/patroni-pgbouncer
+    content: "postgres ALL=(root) NOPASSWD: /usr/bin/systemctl restart pgbouncer\n"
+    owner: root
+    group: root
+    mode: "0440"
+    validate: "visudo -cf %s"
+
+# Members race for the 'initialize' key in etcd: one runs initdb, the others pg_basebackup from it.
+- name: Start and enable Patroni
+  ansible.builtin.systemd_service:
+    name: patroni
+    state: started
+    enabled: true
+    daemon_reload: true
+
+- name: Wait for one leader and all replicas streaming
+  ansible.builtin.command: "patronictl -c {{ patroni_config_file }} list -f json"
+  register: patroni_list
+  changed_when: false
+  until: >-
+    patroni_list.rc == 0 and
+    (patroni_list.stdout | from_json | selectattr('Role', 'equalto', 'Leader') | list | length) == 1 and
+    (patroni_list.stdout | from_json | selectattr('State', 'in', ['running', 'streaming']) | list | length) == (groups['pg_cluster'] | length)
+  retries: 30
+  delay: 10
+  run_once: true

@@ -1,0 +1,45 @@
+# Non-secret, cluster-wide settings.
+cluster_name: pg-ha
+private_network_cidr: 192.168.56.0/24
+postgresql_version: 17
+
+# Secrets are referenced here but stored encrypted in vault.yml (vault_* names).
+postgres_superuser_password: "{{ vault_postgres_superuser_password }}"
+replication_password:        "{{ vault_replication_password }}"
+rewind_password:             "{{ vault_rewind_password }}"
+pgbouncer_auth_password:     "{{ vault_pgbouncer_auth_password }}"
+app_user_password:           "{{ vault_app_user_password }}"
+
+# TLS (shared by etcd, postgresql/patroni, pgbouncer roles)
+tls_dir: /etc/pg-ha/tls
+tls_group: pgha-tls
+tls_ca_cert: "{{ tls_dir }}/ca.crt"
+tls_node_cert: "{{ tls_dir }}/node.crt"
+tls_node_key: "{{ tls_dir }}/node.key"
+
+# etcd (DCS) - shared by the etcd and patroni roles
+etcd_client_port: 2379
+etcd_peer_port: 2380
+etcd_client_endpoints: "{{ groups['etcd_cluster'] | map('extract', hostvars, 'ansible_host') | map('regex_replace', '$', ':' ~ etcd_client_port) | map('regex_replace', '^', 'https://') | join(',') }}"
+
+# PostgreSQL paths (shared by postgresql and patroni roles)
+postgresql_bin_dir: "/usr/lib/postgresql/{{ postgresql_version }}/bin"
+postgresql_data_dir: "/var/lib/postgresql/{{ postgresql_version }}/data"
+postgresql_port: 5432
+
+# Patroni (shared: patroni role, pgbouncer health checks, verification)
+patroni_restapi_port: 8008
+patroni_restapi_username: patroni
+patroni_restapi_password: "{{ vault_patroni_restapi_password }}"
+patroni_replication_username: replicator
+patroni_rewind_username: rewind_user
+
+# PgBouncer + application database (pgbouncer role)
+pgbouncer_port: 6432
+pgbouncer_auth_username: pgbouncer_auth
+app_db_name: appdb
+app_db_user: app_user
+# Who may connect to PgBouncer: cluster network + the Ansible/WSL control node subnet
+pgbouncer_client_cidrs:
+  - "{{ private_network_cidr }}"
+  - 172.16.0.0/12

@@ -1,0 +1,7 @@
+# Copy to vault.yml, set real values, then: ansible-vault encrypt group_vars/all/vault.yml
+vault_postgres_superuser_password: "changeme-superuser"
+vault_replication_password:        "changeme-replicator"
+vault_rewind_password:             "changeme-rewind"
+vault_pgbouncer_auth_password:     "changeme-pgbouncer"
+vault_app_user_password:           "changeme-app"
+vault_patroni_restapi_password:    "changeme-patroni-api"

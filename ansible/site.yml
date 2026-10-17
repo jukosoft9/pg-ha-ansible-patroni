@@ -1,0 +1,36 @@
+---
+- name: Common OS baseline
+  hosts: all
+  become: true
+  roles:
+    - common
+
+- name: Cluster PKI (private CA + node certificates)
+  hosts: all
+  become: true
+  roles:
+    - pki
+
+- name: etcd cluster (Patroni DCS, mTLS)
+  hosts: etcd_cluster
+  become: true
+  roles:
+    - etcd
+
+- name: PostgreSQL binaries (cluster is bootstrapped by Patroni)
+  hosts: pg_cluster
+  become: true
+  roles:
+    - postgresql
+
+- name: Patroni HA cluster (bootstrap + replicas)
+  hosts: pg_cluster
+  become: true
+  roles:
+    - patroni
+
+- name: PgBouncer connection pooler (TLS both sides)
+  hosts: pg_cluster
+  become: true
+  roles:
+    - pgbouncer

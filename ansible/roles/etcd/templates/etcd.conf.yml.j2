@@ -1,0 +1,32 @@
+# {{ ansible_managed }}
+name: {{ inventory_hostname }}
+data-dir: {{ etcd_data_dir }}
+
+listen-peer-urls: https://{{ ansible_host }}:{{ etcd_peer_port }}
+listen-client-urls: https://{{ ansible_host }}:{{ etcd_client_port }},https://127.0.0.1:{{ etcd_client_port }}
+initial-advertise-peer-urls: https://{{ ansible_host }}:{{ etcd_peer_port }}
+advertise-client-urls: https://{{ ansible_host }}:{{ etcd_client_port }}
+
+initial-cluster: "{% for h in groups['etcd_cluster'] %}{{ h }}=https://{{ hostvars[h].ansible_host }}:{{ etcd_peer_port }}{{ '' if loop.last else ',' }}{% endfor %}"
+initial-cluster-token: {{ etcd_cluster_token }}
+initial-cluster-state: new
+
+# mTLS: clients (Patroni, etcdctl) and peers must present a cert signed by the cluster CA
+client-transport-security:
+  cert-file: {{ tls_node_cert }}
+  key-file: {{ tls_node_key }}
+  trusted-ca-file: {{ tls_ca_cert }}
+  client-cert-auth: true
+peer-transport-security:
+  cert-file: {{ tls_node_cert }}
+  key-file: {{ tls_node_key }}
+  trusted-ca-file: {{ tls_ca_cert }}
+  client-cert-auth: true
+
+heartbeat-interval: {{ etcd_heartbeat_interval }}
+election-timeout: {{ etcd_election_timeout }}
+auto-compaction-mode: periodic
+auto-compaction-retention: "1h"
+
+logger: zap
+log-level: info

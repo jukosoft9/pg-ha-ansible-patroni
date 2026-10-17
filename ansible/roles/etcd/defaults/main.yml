@@ -1,0 +1,11 @@
+etcd_version: "3.5.33"
+etcd_arch: amd64
+etcd_cluster_token: "{{ cluster_name }}-etcd"
+etcd_data_dir: /var/lib/etcd
+etcd_download_dir: /var/cache/etcd-dist
+etcd_release_url: "https://github.com/etcd-io/etcd/releases/download/v{{ etcd_version }}"
+etcd_tarball: "etcd-v{{ etcd_version }}-linux-{{ etcd_arch }}.tar.gz"
+etcd_install_dir: "/opt/etcd-v{{ etcd_version }}-linux-{{ etcd_arch }}"
+etcd_heartbeat_interval: 100   # ms
+etcd_election_timeout: 1000    # ms (~10x heartbeat)
+etcdctl_tls_flags: "--cacert={{ tls_ca_cert }} --cert={{ tls_node_cert }} --key={{ tls_node_key }}"

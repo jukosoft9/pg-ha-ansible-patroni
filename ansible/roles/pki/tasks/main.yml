@@ -1,0 +1,131 @@
+---
+# ---------------------------------------------------------------------------
+# 1. On the control node: private CA (once) + one key/cert per node
+# ---------------------------------------------------------------------------
+- name: Create local PKI directory
+  ansible.builtin.file:
+    path: "{{ pki_local_dir }}"
+    state: directory
+    mode: "0700"
+  delegate_to: localhost
+  become: false
+  run_once: true
+
+- name: CA - private key
+  community.crypto.openssl_privatekey:
+    path: "{{ pki_local_dir }}/ca.key"
+    type: ECC
+    curve: secp256r1
+    mode: "0600"
+  delegate_to: localhost
+  become: false
+  run_once: true
+
+- name: CA - certificate signing request
+  community.crypto.openssl_csr:
+    path: "{{ pki_local_dir }}/ca.csr"
+    privatekey_path: "{{ pki_local_dir }}/ca.key"
+    common_name: "{{ pki_ca_common_name }}"
+    use_common_name_for_san: false
+    basic_constraints: ["CA:TRUE"]
+    basic_constraints_critical: true
+    key_usage: [keyCertSign, cRLSign]
+    key_usage_critical: true
+  delegate_to: localhost
+  become: false
+  run_once: true
+
+- name: CA - self-signed certificate
+  community.crypto.x509_certificate:
+    path: "{{ pki_local_dir }}/ca.crt"
+    csr_path: "{{ pki_local_dir }}/ca.csr"
+    privatekey_path: "{{ pki_local_dir }}/ca.key"
+    provider: selfsigned
+    selfsigned_not_after: "{{ pki_ca_valid_for }}"
+  delegate_to: localhost
+  become: false
+  run_once: true
+
+- name: Node - private key
+  community.crypto.openssl_privatekey:
+    path: "{{ pki_local_dir }}/{{ inventory_hostname }}.key"
+    type: ECC
+    curve: secp256r1
+    mode: "0600"
+  delegate_to: localhost
+  become: false
+
+- name: Node - CSR (SANs cover hostname, private IP and loopback)
+  community.crypto.openssl_csr:
+    path: "{{ pki_local_dir }}/{{ inventory_hostname }}.csr"
+    privatekey_path: "{{ pki_local_dir }}/{{ inventory_hostname }}.key"
+    common_name: "{{ inventory_hostname }}"
+    subject_alt_name:
+      - "DNS:{{ inventory_hostname }}"
+      - "DNS:localhost"
+      - "IP:{{ ansible_host }}"
+      - "IP:127.0.0.1"
+    key_usage: [digitalSignature]
+    key_usage_critical: true
+    extended_key_usage: [serverAuth, clientAuth]
+  delegate_to: localhost
+  become: false
+
+- name: Node - certificate signed by the cluster CA
+  community.crypto.x509_certificate:
+    path: "{{ pki_local_dir }}/{{ inventory_hostname }}.crt"
+    csr_path: "{{ pki_local_dir }}/{{ inventory_hostname }}.csr"
+    provider: ownca
+    ownca_path: "{{ pki_local_dir }}/ca.crt"
+    ownca_privatekey_path: "{{ pki_local_dir }}/ca.key"
+    ownca_not_after: "{{ pki_node_valid_for }}"
+  delegate_to: localhost
+  become: false
+
+# ---------------------------------------------------------------------------
+# 2. On each node: install CA cert + node's own cert/key only
+# ---------------------------------------------------------------------------
+- name: Create TLS group (services that need the node key join it)
+  ansible.builtin.group:
+    name: "{{ tls_group }}"
+    system: true
+
+- name: Create TLS directory
+  ansible.builtin.file:
+    path: "{{ tls_dir }}"
+    state: directory
+    owner: root
+    group: "{{ tls_group }}"
+    mode: "0750"
+
+- name: Install CA certificate
+  ansible.builtin.copy:
+    src: "{{ pki_local_dir }}/ca.crt"
+    dest: "{{ tls_ca_cert }}"
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Install node certificate
+  ansible.builtin.copy:
+    src: "{{ pki_local_dir }}/{{ inventory_hostname }}.crt"
+    dest: "{{ tls_node_cert }}"
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Install node private key
+  ansible.builtin.copy:
+    src: "{{ pki_local_dir }}/{{ inventory_hostname }}.key"
+    dest: "{{ tls_node_key }}"
+    owner: root
+    group: "{{ tls_group }}"
+    mode: "0640"
+  no_log: true
+
+- name: Trust the cluster CA system-wide (curl, Python, etc.)
+  ansible.builtin.copy:
+    src: "{{ pki_local_dir }}/ca.crt"
+    dest: /usr/local/share/ca-certificates/pg-ha-ca.crt
+    mode: "0644"
+  notify: Update CA trust store

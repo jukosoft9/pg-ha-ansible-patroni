@@ -1,0 +1,66 @@
+---
+# Patroni owns initdb/start/stop. Stop postgresql-common from creating a default 'main' cluster.
+- name: Create postgresql-common config directory
+  ansible.builtin.file:
+    path: /etc/postgresql-common
+    state: directory
+    mode: "0755"
+
+- name: Disable automatic creation of a default cluster on package install
+  ansible.builtin.copy:
+    dest: /etc/postgresql-common/createcluster.conf
+    mode: "0644"
+    content: |
+      # Managed by Ansible (postgresql role) - do not edit by hand.
+      # Patroni bootstraps and manages the cluster - never auto-create one.
+      create_main_cluster = false
+
+- name: Install prerequisites for deb822 repositories
+  ansible.builtin.apt:
+    name: [python3-debian, gnupg]
+    state: present
+    lock_timeout: 300
+
+- name: Add the official PostgreSQL (PGDG) apt repository
+  ansible.builtin.deb822_repository:
+    name: pgdg
+    types: deb
+    uris: https://apt.postgresql.org/pub/repos/apt
+    suites: "{{ ansible_facts['distribution_release'] }}-pgdg"
+    components: main
+    signed_by: https://www.postgresql.org/media/keys/ACCC4CF8.asc
+  register: pgdg_repo
+
+- name: Refresh apt cache after adding the repository
+  ansible.builtin.apt:
+    update_cache: true
+    lock_timeout: 300
+  when: pgdg_repo.changed
+
+- name: Install PostgreSQL {{ postgresql_version }} server and client
+  ansible.builtin.apt:
+    name:
+      - "postgresql-{{ postgresql_version }}"
+      - "postgresql-client-{{ postgresql_version }}"
+    state: present
+    lock_timeout: 300
+
+- name: Keep the distro umbrella service off (Patroni manages PostgreSQL)
+  ansible.builtin.systemd_service:
+    name: postgresql
+    state: stopped
+    enabled: false
+
+- name: Add postgres to the TLS group (reads the node key for SSL)
+  ansible.builtin.user:
+    name: postgres
+    groups: "{{ tls_group }}"
+    append: true
+
+- name: Create the (empty) data directory for Patroni to initdb into
+  ansible.builtin.file:
+    path: "{{ postgresql_data_dir }}"
+    state: directory
+    owner: postgres
+    group: postgres
+    mode: "0700"

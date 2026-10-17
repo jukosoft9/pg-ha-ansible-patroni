@@ -1,0 +1,157 @@
+---
+- name: Install PgBouncer (PGDG package)
+  ansible.builtin.apt:
+    name: pgbouncer
+    state: present
+    install_recommends: false
+    lock_timeout: 300
+
+# ---------------------------------------------------------------------------
+# Database objects: created on the current Patroni leader only (replicas get them via replication)
+# ---------------------------------------------------------------------------
+- name: Detect the current Patroni leader
+  ansible.builtin.uri:
+    url: "https://{{ ansible_host }}:{{ patroni_restapi_port }}/primary"
+    ca_path: "{{ tls_ca_cert }}"
+    status_code: [200, 503]
+  register: patroni_primary
+  changed_when: false
+
+- name: Database objects (leader only)
+  when: patroni_primary.status == 200
+  become_user: postgres
+  block:
+    # no_password_changes: the password is set when the role is created; on later runs the
+    # existing SCRAM hash is not compared (keeps the task idempotent; rotation is a deliberate op).
+    - name: PgBouncer auth lookup user
+      community.postgresql.postgresql_user:
+        name: "{{ pgbouncer_auth_username }}"
+        password: "{{ pgbouncer_auth_password }}"
+        no_password_changes: true
+      no_log: true
+
+    - name: Application user
+      community.postgresql.postgresql_user:
+        name: "{{ app_db_user }}"
+        password: "{{ app_user_password }}"
+        no_password_changes: true
+      no_log: true
+
+    - name: Application database
+      community.postgresql.postgresql_db:
+        name: "{{ app_db_name }}"
+        owner: "{{ app_db_user }}"
+
+    - name: Schema for the auth lookup function
+      community.postgresql.postgresql_schema:
+        login_db: postgres
+        name: pgbouncer
+
+    - name: Check whether the auth lookup function exists
+      community.postgresql.postgresql_query:
+        login_db: postgres
+        query: >-
+          SELECT count(*) AS n FROM pg_proc p JOIN pg_namespace ns ON ns.oid = p.pronamespace
+          WHERE ns.nspname = 'pgbouncer' AND p.proname = 'get_auth'
+      register: auth_fn
+      changed_when: false
+
+    # SECURITY DEFINER so pgbouncer_auth can read pg_shadow without being superuser;
+    # superusers are excluded so 'postgres' can never log in through the pooler.
+    - name: Create the auth lookup function
+      community.postgresql.postgresql_query:
+        login_db: postgres
+        query: |
+          CREATE FUNCTION pgbouncer.get_auth(p_usename text)
+          RETURNS TABLE (usename name, passwd text)
+          LANGUAGE sql SECURITY DEFINER
+          SET search_path = pg_catalog
+          AS $$
+            SELECT usename, passwd FROM pg_catalog.pg_shadow
+            WHERE usename = p_usename AND NOT usesuper
+          $$
+      when: auth_fn.query_result[0].n == 0
+
+    - name: Nobody else may execute the auth function
+      community.postgresql.postgresql_privs:
+        login_db: postgres
+        type: function
+        schema: pgbouncer
+        objs: get_auth(text)
+        privs: EXECUTE
+        roles: PUBLIC
+        state: absent
+
+    - name: Allow pgbouncer_auth to use the auth function
+      community.postgresql.postgresql_privs:
+        login_db: postgres
+        type: function
+        schema: pgbouncer
+        objs: get_auth(text)
+        privs: EXECUTE
+        roles: "{{ pgbouncer_auth_username }}"
+
+    - name: Allow pgbouncer_auth to use the schema
+      community.postgresql.postgresql_privs:
+        login_db: postgres
+        type: schema
+        objs: pgbouncer
+        privs: USAGE
+        roles: "{{ pgbouncer_auth_username }}"
+
+# ---------------------------------------------------------------------------
+# PgBouncer configuration (all nodes)
+# ---------------------------------------------------------------------------
+- name: Deploy pgbouncer.ini
+  ansible.builtin.template:
+    src: pgbouncer.ini.j2
+    dest: "{{ pgbouncer_config_dir }}/pgbouncer.ini"
+    owner: root
+    group: postgres
+    mode: "0640"
+  notify: Restart pgbouncer
+
+- name: Deploy PgBouncer hba rules
+  ansible.builtin.template:
+    src: pgbouncer_hba.conf.j2
+    dest: "{{ pgbouncer_config_dir }}/pgbouncer_hba.conf"
+    owner: root
+    group: postgres
+    mode: "0640"
+  notify: Restart pgbouncer
+
+- name: Deploy userlist (auth lookup user only)
+  ansible.builtin.template:
+    src: userlist.txt.j2
+    dest: "{{ pgbouncer_config_dir }}/userlist.txt"
+    owner: root
+    group: postgres
+    mode: "0640"
+  no_log: true
+  notify: Restart pgbouncer
+
+- name: Start and enable PgBouncer
+  ansible.builtin.systemd_service:
+    name: pgbouncer
+    state: started
+    enabled: true
+
+- name: Flush handlers so PgBouncer runs the new config before the check
+  ansible.builtin.meta: flush_handlers
+
+# Retries cover PgBouncer's short server_login_retry back-off after an earlier failed login.
+- name: Verify a TLS login through the local PgBouncer
+  community.postgresql.postgresql_ping:
+    login_host: 127.0.0.1
+    login_port: "{{ pgbouncer_port }}"
+    login_user: "{{ app_db_user }}"
+    login_password: "{{ app_user_password }}"
+    login_db: "{{ app_db_name }}"
+    ssl_mode: verify-full
+    ca_cert: "{{ tls_ca_cert }}"
+  register: pgb_ping
+  until: pgb_ping.is_available
+  retries: 6
+  delay: 5
+  failed_when: not pgb_ping.is_available
+  no_log: true

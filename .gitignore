@@ -1,0 +1,13 @@
+# Vagrant VM state (VM disks live here; never commit)
+.vagrant/
+# Local SSH public key copy (machine-specific)
+keys/
+# Ansible
+*.retry
+.vault_pass*
+# Python
+__pycache__/
+.venv/
+
+# Generated PKI (CA + node private keys) - never commit
+ansible/pki/

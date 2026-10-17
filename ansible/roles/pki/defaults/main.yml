@@ -1,0 +1,4 @@
+pki_local_dir: "{{ playbook_dir }}/pki"     # on the control node, git-ignored
+pki_ca_common_name: "{{ cluster_name }} Root CA"
+pki_ca_valid_for: "+3650d"
+pki_node_valid_for: "+730d"

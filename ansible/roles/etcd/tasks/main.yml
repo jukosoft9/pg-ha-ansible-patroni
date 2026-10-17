@@ -1,0 +1,95 @@
+---
+- name: Create etcd system group
+  ansible.builtin.group:
+    name: etcd
+    system: true
+
+- name: Create etcd system user (member of the TLS group to read the node key)
+  ansible.builtin.user:
+    name: etcd
+    group: etcd
+    groups: "{{ tls_group }}"
+    append: true
+    system: true
+    shell: /usr/sbin/nologin
+    home: "{{ etcd_data_dir }}"
+    create_home: false
+
+- name: Create etcd directories
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner }}"
+    group: "{{ item.owner }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - { path: "{{ etcd_download_dir }}", owner: root, mode: "0755" }
+    - { path: /etc/etcd,                 owner: root, mode: "0755" }
+    - { path: "{{ etcd_data_dir }}",     owner: etcd, mode: "0700" }
+
+- name: Download etcd release
+  ansible.builtin.get_url:
+    url: "{{ etcd_release_url }}/{{ etcd_tarball }}"
+    dest: "{{ etcd_download_dir }}/{{ etcd_tarball }}"
+    checksum: "sha256:{{ etcd_release_url }}/SHA256SUMS"
+    mode: "0644"
+
+- name: Unpack etcd
+  ansible.builtin.unarchive:
+    src: "{{ etcd_download_dir }}/{{ etcd_tarball }}"
+    dest: /opt
+    remote_src: true
+    creates: "{{ etcd_install_dir }}/etcd"
+
+- name: Link etcd binaries into PATH
+  ansible.builtin.file:
+    src: "{{ etcd_install_dir }}/{{ item }}"
+    dest: "/usr/local/bin/{{ item }}"
+    state: link
+  loop: [etcd, etcdctl, etcdutl]
+  notify: Restart etcd
+
+- name: Deploy etcd configuration
+  ansible.builtin.template:
+    src: etcd.conf.yml.j2
+    dest: /etc/etcd/etcd.conf.yml
+    owner: root
+    group: etcd
+    mode: "0640"
+  notify: Restart etcd
+
+- name: Deploy etcd systemd unit
+  ansible.builtin.template:
+    src: etcd.service.j2
+    dest: /etc/systemd/system/etcd.service
+    mode: "0644"
+  notify: Restart etcd
+
+- name: etcdctl defaults for root login shells (endpoints + TLS client cert)
+  ansible.builtin.copy:
+    dest: /etc/profile.d/etcdctl.sh
+    mode: "0644"
+    content: |
+      export ETCDCTL_API=3
+      export ETCDCTL_ENDPOINTS={{ etcd_client_endpoints }}
+      export ETCDCTL_CACERT={{ tls_ca_cert }}
+      export ETCDCTL_CERT={{ tls_node_cert }}
+      export ETCDCTL_KEY={{ tls_node_key }}
+
+# All members start in parallel: a new cluster only becomes ready once a quorum is up.
+- name: Start and enable etcd
+  ansible.builtin.systemd_service:
+    name: etcd
+    state: started
+    enabled: true
+    daemon_reload: true
+
+- name: Wait until every etcd member is healthy (over mTLS)
+  ansible.builtin.command: >-
+    etcdctl --endpoints={{ etcd_client_endpoints }} {{ etcdctl_tls_flags }} endpoint health
+  register: etcd_health
+  until: etcd_health.rc == 0
+  retries: 12
+  delay: 5
+  changed_when: false
+  run_once: true

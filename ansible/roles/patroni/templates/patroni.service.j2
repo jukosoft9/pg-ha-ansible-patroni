@@ -1,0 +1,21 @@
+# {{ ansible_managed }}
+[Unit]
+Description=Patroni - PostgreSQL HA manager ({{ patroni_scope }})
+Documentation=https://patroni.readthedocs.io/
+After=network-online.target etcd.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=postgres
+Group=postgres
+ExecStart=/usr/bin/patroni {{ patroni_config_file }}
+ExecReload=/bin/kill -s HUP $MAINPID
+# Let Patroni stop PostgreSQL itself (clean shutdown + leader key release)
+KillMode=process
+TimeoutSec=30
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
