@@ -42,6 +42,12 @@
         name: "{{ app_db_name }}"
         owner: "{{ app_db_user }}"
 
+    # Read-only monitoring role: lets the migration read replica lag for adaptive throttling
+    - name: Grant pg_monitor to the application user
+      community.postgresql.postgresql_membership:
+        groups: pg_monitor
+        target_roles: "{{ app_db_user }}"
+
     - name: Schema for the auth lookup function
       community.postgresql.postgresql_schema:
         login_db: postgres
